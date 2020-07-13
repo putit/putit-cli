@@ -1,0 +1,73 @@
+#!/bin/bash
+
+parse_args() {
+  if [ $# -eq 0 ]; then 
+    get_help
+    exit 1
+  fi   
+  optspec=":h-:"
+  while getopts "$optspec" optchar; do
+      case "${optchar}" in
+          -)
+              case "${OPTARG}" in
+                  source-name)
+                      val="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                      #echo "Parsing option: '--${OPTARG}', value: '${val}'" >&2;
+                      putit_step_source_name=${val}
+                      ;;
+                  imported-name)
+                      val="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                      #echo "Parsing option: '--${OPTARG}', value: '${val}'" >&2;
+                      putit_step_imported_name=${val}
+                      ;;
+                  description)
+                      val="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                      #echo "Parsing option: '--${OPTARG}', value: '${val}'" >&2
+                      putit_step_description=${val}
+                      ;;
+                  properties-description)
+                      val="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                      #echo "Parsing option: '--${OPTARG}', value: '${val}'" >&2
+                      putit_step_properties_description=${val}
+                      ;;
+                  github-url)
+                      val="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                      #echo "Parsing option: '--${OPTARG}', value: '${val}'" >&2
+                      putit_step_github_url=${val}
+                      ;;
+                  help)
+                      get_help
+                      exit 1
+                      ;;
+                  *) 
+                      echo "${optspec:0:1} ${OPTARG}" 
+                      #if [ "$OPTERR" = 1 ] && [ "${optspec:0:1}" != ":" ]; then
+                      if [ "$OPTERR" = 1 ]; then
+                          echo -e "Unknown option --${OPTARG}\n" >&2
+                          get_help  
+                          exit 1
+                      fi
+                      ;;
+              esac;;
+          h) 
+              get_help
+              exit 1
+              ;;
+          *)
+              if [ "$OPTERR" = 1 ] || [ "${optspec:0:1}" = ":" ]; then
+                  echo "Non-option argument: '-${OPTARG}'" >&2
+                  exit 1
+              fi
+              ;;
+      esac
+  done
+  # obligatory paramas goes here  
+  # if putit_step_source_name is set and imported name is not set use source as imported name. 
+  if [ ! -z ${putit_step_source_name+x} ] && [ -z ${putit_step_imported_name+x} ] ; then 
+    putit_step_imported_name=${putit_step_source_name}
+  fi
+  if [ -z ${putit_step_github_url+x} ] || [ -z ${putit_step_source_name+x} ]; then
+    get_help
+    exit 1
+  fi
+}

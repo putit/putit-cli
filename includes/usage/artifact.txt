@@ -1,0 +1,8 @@
+add --art-name <NAME> --art-version <VERSION> [--properties <KEY=VALUE>] [ --app-name <NAME> --app-version <VERSION> ] ; Add new artifact and optionally assign it to the application. 
+delete --art-name <NAME> [--art-version <VERSION>] ; Deletes the artifcat version or artifact itself with all versions; 
+get --art-name <NAME> [--art-version <VERSION>] ; Get artifact
+get-versions --art-name <NAME> ; Get all verions for artifact
+set-properties --art-name <NAME> --art-version <VERSION> --properties <KEY=VALUE> ; Set properties for artifact
+get-properties --art-name <NAME> --art-version <VERSION> ; Get properties for artifact
+list ; List all artifacts
+

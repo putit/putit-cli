@@ -1,0 +1,214 @@
+#!/bin/bash
+set -euo pipefail
+
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh 
+
+# shift application args: putit application 
+shift 1
+
+get_help() {
+  generate_usage
+}
+
+
+get_change() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+    
+  if [ ! -z ${putit_change_id+x} ]; then 
+  local regex="${int_regex}"
+  validate ${putit_change_id}
+    local request="${PUTIT_CURL} ${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_id}"
+  elif [ ! -z ${putit_change_name+x} ]; then
+    local request="${PUTIT_CURL} ${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}"
+  fi
+  $request |
+  jq -r '["Id", "Name", "Desc", "Start", "End"], (.id, .name, .description, .start_date, .end_date) | @sh' |
+  column -t
+}
+
+get_status() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  # by default get results for app and all envs
+  local request_url="${PUTIT_URL}/status/${putit_application_name}"
+
+  # get results for change and release
+  if [ ! -z ${putit_deploy_status_by_change+x} ]; then 
+    local regex="${release_name_regex}"
+    validate ${putit_release_name}
+    local regex="${change_name_regex}"
+    validate ${putit_change_name}
+    local regex="${application_version_regex}"
+    validate ${putit_application_version}
+    request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/results/${putit_application_name}/${putit_application_version}/envs/${putit_environment_name}/all"
+  # list results for app and env
+  elif [ ! -z ${putit_deploy_status_by_env+x} ]; then 
+    local regex="${env_name_regex}"
+    validate ${putit_environment_name}
+    local request_url="${PUTIT_URL}/status/${putit_application_name}/${putit_environment_name}"
+  fi
+
+  local response_file="$(create_tmpfile)"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There is no deployment status for application: ${putit_application_name} on environment: ${putit_environment_name}"
+  # display logs for this deployment 
+  elif [ ! -z ${putit_deploy_show_logs+x} ] && [ "${putit_deploy_show_logs}" == "true" ]; then 
+    display_logs "${response_file}"
+  else
+    display
+  fi
+
+}
+
+display_logs() {
+  local response_file=$1
+  if [ -f ${response_file} ]; then 
+    local log_url=$(cat ${response_file} | jq -r .log_url)
+    local request_cmd="${PUTIT_CURL} /dev/stdout ${log_url}"
+    send_request "${request_cmd}" "/dev/stdout"
+  fi
+}
+
+set_status() {
+  # those has to be set in boths scenarios
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  local regex="${application_version_regex}"
+  validate ${putit_application_version}
+  local regex="${putit_deploy_status_regex}"
+  validate ${putit_deploy_status}
+
+  # two kinds of  setting deployment: as change and release predefined earlier OR easy way - where putit will auto build change, release and add application with env into it. 
+  if [ "${putit_deploy_way}" == "change" ]; then 
+    local regex="${release_name_regex}"
+    validate ${putit_release_name}
+    local regex="${change_name_regex}"
+    validate ${putit_change_name}
+    local regex="${application_version_regex}"
+    validate ${putit_application_version}
+  elif [ "${putit_deploy_way}" == "application" ]; then 
+    auto_create_change_release_add_app
+    putit_release_name=${auto_release_name} 
+    putit_change_name=${auto_change_name} 
+  fi
+
+  local payload_file="$(create_tmpfile)"
+  jo status=${putit_deploy_status} > ${payload_file}
+
+  request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/results/${putit_application_name}/${putit_application_version}/envs/${putit_environment_name}"
+
+  local response_file="$(create_tmpfile)"
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X PUT ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Deployment status: ${putit_deploy_status} set for release: ${putit_release_name} on change: ${putit_change_name} application: ${putit_application_name} version: ${putit_application_version} env: ${putit_environment_name}"
+}
+
+execute() {
+  # two kinds of executing deployment: as change and release predefined earlier OR easy way - where putit will auto build change, release and add application with env into it. 
+  if [ "${putit_deploy_way}" == "change" ]; then 
+    local regex="${release_name_regex}"
+    validate ${putit_release_name}
+    local regex="${change_name_regex}"
+    validate ${putit_change_name}
+
+    # get change status
+    local response_file="$(create_tmpfile)"
+    local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/status"
+    local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+    send_request "${request_cmd}" "${response_file}"
+    local putit_change_status=$(cat ${response_file})
+    log "INFO" "Status for a change: ${putit_change_name} is: ${putit_change_status}"
+
+    # remove " from putit_change_status
+    if [ "${putit_change_status//\"}" == "approved" ] || [ "${putit_change_status//\"}" == "working" ] ; then 
+      response_file="$(create_tmpfile)"
+      log "INFO" "Executing"
+      curl -K ${PUTIT_CURLRC} --write-out %{http_code} --silent ${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/execute
+    else 
+     log "ERROR" "Change status: ${putit_change_status} doesn't allow executing this change." 
+    fi
+  elif [ "${putit_deploy_way}" == "application" ]; then
+    auto_create_change_release_add_app  
+    putit change execute --release-name ${auto_release_name} --change-name ${auto_change_name}
+  else 
+    log "ERROR" "Wrong deploy execution."
+    get_help 
+    exit 1
+  fi
+}
+
+# PRIVATE 
+auto_create_release() {
+  # date with ms
+  local timestamp=$(date +%Y%m%d-%H%M%S%3N)
+  auto_release_name="R-${putit_environment_name}-${putit_application_name}-${timestamp}"
+  putit release create --release-name ${auto_release_name}
+}
+
+auto_create_change() {
+  local release_name=$1
+  # date with ms
+  local timestamp=$(date +%Y%m%d-%H%M%S%3N)
+  auto_change_name="C-${putit_environment_name}-${putit_application_name}-${timestamp}"
+  putit change create --change-name ${auto_change_name} --release-name ${auto_release_name}
+}
+
+auto_create_change_release_add_app() {
+    local regex="${app_name_regex}"
+    validate ${putit_application_name}
+    local regex="${application_version_regex}"
+    validate ${putit_application_version}
+    local regex="${env_name_regex}"
+    validate ${putit_environment_name}
+
+
+    is_env_present "${putit_application_name}" "${putit_environment_name}"
+    auto_create_release
+    auto_create_change ${auto_release_name}
+    putit change add-application --release-name ${auto_release_name} --change-name ${auto_change_name} --app-version ${putit_application_version} --app-name ${putit_application_name} --env-name ${putit_environment_name} 
+}
+
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  set-status)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    set_status 
+    ;; 
+  get-status)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_status 
+    ;; 
+  create)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    create 
+    ;;
+  execute)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    execute
+    ;;
+  *)
+    log "INFO" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

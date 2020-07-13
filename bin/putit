@@ -1,0 +1,136 @@
+#!/bin/bash
+set -euo pipefail
+
+abspath() {
+	# generate absolute path from relative path
+	# $1     : relative filename
+	# return : absolute path
+	if [ -d "$1" ]; then
+		# dir
+		(cd "$1"; pwd)
+	elif [ -f "$1" ]; then
+		# file
+		if [[ $1 == */* ]]; then
+		  echo "$(cd "${1%/*}"; pwd)/${1##*/}"
+		else
+			echo "$(pwd)/$1"
+		fi
+	fi
+}
+
+function load_common_functions {
+  local bin_dir="$(dirname $(abspath $0))"
+  local common_functions_file="${bin_dir%bin}includes/common-functions.sh"
+  if [ -f ${common_functions_file} ]; then 
+    . ${common_functions_file}
+  else 
+    echo "[ERROR] Unable to load common_functions.sh file."
+    exit 1
+  fi
+}
+
+function set_config_vars {
+  local var=$1
+  local val=$2
+  if [ "$var" == 'putit_core_hostname' ]; then 
+    export PUTIT_CORE_HOST="${val}"
+  elif [ "$var" == 'putit_core_port' ]; then 
+    export PUTIT_CORE_PORT="${val}"
+  elif [ "$var" == 'putit_auth_hostname' ]; then 
+    export PUTIT_AUTH_HOST="${val}"
+  elif [ "$var" == 'putit_auth_port' ]; then 
+    export PUTIT_AUTH_PORT="${val}"
+  elif [ "$var" == 'putit_cli_install_dir' ]; then 
+    export PUTIT_CLI_INSTALL_DIR="${val}"
+  elif [ "$var" == 'putit_ignore_untrusted_certs' ]; then 
+    export PUTIT_IGNORE_UNTRUSTED_CERTS="${val}"
+  fi
+}
+
+function load_config {
+  local bin_dir="$(dirname $(abspath $0))"
+  local conf_file="${bin_dir%bin}conf/putit-cli.conf"
+  if [ -f "${conf_file}" ]; then 
+    local putitrc_section_regex="\[([a-z]+)\]"
+    while IFS='= ' read var val; do
+      if [[ $var =~ ${putitrc_section_regex} ]]; then
+          section=${BASH_REMATCH[1]}
+      elif [[ $val ]]; then
+          local val=$(echo $val|tr -d \'\")
+          set_config_vars "$var" "$val" 
+      fi
+    done < $conf_file 
+  else 
+    echo "[ERROR] Missing configuration file: $conf_file"
+    exit 1
+  fi
+}
+
+function set_vars {
+  export APP_USER=$(whoami)
+  export APP_USER_GID="$(id -g $APP_USER)"
+  export PUTIT_CURLRC="${HOME}/.curlrc_putit_cli"
+  export PUTIT_URL="${PUTIT_CORE_HOST}:${PUTIT_CORE_PORT}"
+  export PUTIT_AUTH_URL="${PUTIT_AUTH_HOST}:${PUTIT_AUTH_PORT}"
+  PUTIT_CURL_OPTIONS=''
+  if [ ! -z ${PUTIT_DEBUG_CLI+x} ]; then  
+    PUTIT_CURL_OPTIONS="-v "
+  fi
+  if [[ ! -z ${PUTIT_IGNORE_UNTRUSTED_CERTS+x} ]] && ([[ "${PUTIT_IGNORE_UNTRUSTED_CERTS}" == 'true' ]] || [[ "${PUTIT_IGNORE_UNTRUSTED_CERTS}" == '1' ]]); then  
+    PUTIT_CURL_OPTIONS+="-k "
+  fi
+  export CT_HEADER_JSON="-H Content-Type:application/json"
+  export A_HEADER_JSON="-H Accept:application/json"
+  export CT_A_HEADERS_JSON="-H Content-Type:application/json -H Accept:application/json"
+  export CT_HEADER_DATA="-H Content-Type:multipart/form-data"
+  export PUTIT_CURL_BIN="curl ${PUTIT_CURL_OPTIONS}"
+  export PUTIT_CURL="${PUTIT_CURL_BIN} -K ${PUTIT_CURLRC} --silent --write-out %{http_code} --output"
+}
+
+function get_help {
+  echo "Available commands:"
+  for command in $(ls ${PUTIT_CLI_INSTALL_DIR}/bin/putit-*) ; do echo "  $(basename "$0") $(basename $command | cut -d'-' -f2)" ; done
+}
+
+touch_curlrc() {
+  if [ ! -f ${PUTIT_CURLRC} ]; then 
+    touch ${PUTIT_CURLRC}
+  fi
+}
+
+check_binaries() {
+  for arg 
+  do
+    local bin_name=$arg
+    log "DEBUG" "Checking if ${bin_name} is installed..."
+    if  type ${bin_name} >/dev/null 2>&1 ; then 
+      log "DEBUG" "Found ${bin_name}."
+    # here comes binaries that putit team can provide
+    elif [ "${bin_name}" == 'jo' ]; then 
+      PUTIT_JO_BIN="${bin_name}" 
+    elif  [ "${bin_name}" == 'jq' ]; then 
+      PUTIT_JQ_BIN="${bin_name}" 
+    else
+      log "ERROR" "Missing $bin_name. Please install."
+      exit 1
+    fi  
+  done
+}
+
+load_common_functions
+check_os
+check_binaries 'jo' 'jq'
+load_config
+set_vars
+touch_curlrc
+
+# checkc if putit was run with at least one args
+if [ -z ${1+x} ]; then 
+  get_help
+  exit 64
+elif ! [ -f "$(dirname $(abspath $0))/putit-${1}" ]; then
+  get_help
+  exit 64
+else
+  /bin/bash $(dirname $(abspath $0))/putit-$1 "$@"
+fi

@@ -1,0 +1,8 @@
+ create --release-name <NAME> ; Create new release
+ delete --release-name <NAME> ; Delete release
+ add-dependencies --master-name <NAME> --depend-release <DEPEND_NAME> ; Add depended release
+ remove-dependencies --master-name <NAME> --depend-release <DEPEND_NAME> ; Remove depended release
+ list ; List all releases
+ list-dependant --release-name <NAME> ; List dependant releases 
+ set-status --release-name <NAME> --status <STATUS> ; Set status of the release
+ get-status --release-name <NAME> ; Get status of the release

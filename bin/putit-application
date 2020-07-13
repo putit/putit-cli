@@ -1,0 +1,686 @@
+#!/bin/bash
+set -euo pipefail
+
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh 
+
+# shift application args: putit application 
+shift 1
+
+get_help() {
+  generate_usage
+}
+
+# it's not standard function, json payload is build during args validation and save to the file 
+# thanks that we can ommit bash issue - unable to pass associative array between function - but still 
+# proceed with single request with multiple properties 
+set_application_properties() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+
+  # double check if file exist 
+  if [ -f ${putit_application_properties_file} ] &&  [ ! -z ${putit_application_properties_file+x} ];then
+    local response_file="$(create_tmpfile)"
+    local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/properties"
+    local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$putit_application_properties_file ${request_url// /%20}"
+    
+    send_request "${request_cmd}" "${response_file}"
+    log "INFO" "Properties set for application: ${putit_application_name} for environment: ${putit_environment_name}."
+  else
+    log "ERROR" "Missing properties payload file: ${putit_application_properties_file}."
+    exit 1
+  fi
+  clean_tmp ${putit_application_properties_file}
+  unset putit_application_properties_file
+}
+
+get_application() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  
+  local request_url="${PUTIT_URL}/application/${putit_application_name}"
+
+  if [ ! -z ${putit_application_version+x} ]; then 
+    local regex="${application_version_regex}"
+    validate ${putit_application_version}
+    local request_url="${PUTIT_URL}/application/${putit_application_name}/version/${putit_application_version}"
+  fi
+
+  local response_file="$(create_tmpfile)"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No such application: ${putit_application_name}"
+  else 
+    display
+  fi  
+}
+
+get_application_properties() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/properties"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No properties for application: ${putit_application_name} for environment: ${putit_environment_name}"
+  else 
+    display
+  fi  
+}
+
+delete_application_properties() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  local regex="${application_properties_regex}"
+  validate ${putit_properties_key}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/properties/${putit_properties_key}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Properties with key ${putit_properties_key} for application: ${putit_application_name} for environment: ${putit_environment_name} deleted."
+}
+
+get_applications() {
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  if is_empty_response "${response_file}" ; then 
+    log "INFO" "There aren't any defined applications."
+  else 
+    display
+  fi
+}
+
+create() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local payload_file="$(create_tmpfile)"
+
+  # optional 
+  if [ ! -z ${putit_application_version+x} ]; then 
+    local regex="${application_version_regex}"
+    validate ${putit_application_version}
+    jo -- name="${putit_application_name}" -s version="${putit_application_version}" > $payload_file
+  else 
+    jo name="${putit_application_name}" > $payload_file
+  fi
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+
+  log "INFO" "Application: ${putit_application_name} added."
+}
+
+delete() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+
+  log "INFO" "Application: ${putit_application_name} deleted."
+}
+
+add_version() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local payload_file="$(create_tmpfile)"
+
+  # version set by semver 
+  if [[ ${putit_application_version} =~ ${putit_application_semver_term_regex} ]]; then
+    jo -- -s term="${putit_application_version}" > $payload_file
+    local log_msg="Adding new semantic version: ${putit_application_version} into application: ${putit_application_name}"
+    # add build into version if set
+    if [ ! -z  ${putit_application_semver_build+x} ]; then 
+      local regex="${putit_application_semver_build_regex}"
+      validate ${putit_application_semver_build}
+      log "DEBUG" "SemVer: ${putit_application_version} with build: ${putit_application_semver_build}"    
+      local payload_file_build="$(create_tmpfile)"
+      cat $payload_file | jq ".build+=\"${putit_application_semver_build}\"" > $payload_file_build
+      clean_tmp ${payload_file}
+      payload_file="${payload_file_build}"
+      local log_msg="${log_msg}. SemVer build set to: ${putit_application_semver_build}"
+    fi
+    # add prefix if set
+    if [ ! -z  ${putit_application_semver_prefix+x} ]; then
+      local regex="${putit_application_semver_prefix_regex}"
+      validate ${putit_application_semver_prefix}
+      log "DEBUG" "SemVer: ${putit_application_version} with prefix: ${putit_application_semver_prefix}"    
+      local payload_file_prefix="$(create_tmpfile)"
+      cat $payload_file | jq ".pre+=\"${putit_application_semver_prefix}\"" > $payload_file_prefix
+      clean_tmp ${payload_file}
+      payload_file="${payload_file_prefix}"
+      local log_msg="${log_msg}. SemVer prefix set to: ${putit_application_semver_prefix}"
+    fi
+  # version as a string
+  elif [ ! -z ${putit_application_version+x} ]; then 
+    local regex="${application_version_regex}"
+    validate ${putit_application_version}
+    jo -- -s version="${putit_application_version}" > $payload_file
+    local log_msg="Version: ${putit_application_version} added into application: ${putit_application_name}"
+  fi
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/versions"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+
+  log "INFO" "${log_msg}"
+}
+
+add_envs() {
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local putit_application_properties_file="$(create_tmpfile)"
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo -a $(jo name="${putit_environment_name}") > "${payload_file}"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+
+  log "DEBUG" "Adding env: ${putit_environment_name} to application: ${putit_application_name}"
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Environment ${putit_environment_name} added to application: ${putit_application_name}"
+}
+
+delete_envs() {
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+
+  log "DEBUG" "Adding env: ${putit_environment_name} to application: ${putit_application_name}"
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Environment ${putit_environment_name} deleted from application: ${putit_application_name}"
+}
+
+add_hosts() {
+  local regex="${putit_host_name_regex}"
+  validate ${putit_host_name}
+  local regex="${putit_fqdn_regex}"
+  validate ${putit_host_fqdn}
+  local regex="${putit_ip_regex}"
+  validate ${putit_host_ip}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo name=${putit_host_name} ip=${putit_host_ip} fqdn=${putit_host_fqdn} > ${payload_file}
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/hosts"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Host with name: ${putit_host_name} ip: ${putit_host_ip} and fqdn: ${putit_host_fqdn} added."
+}
+
+delete_hosts() {
+  local regex="${putit_fqdn_regex}"
+  validate ${putit_host_fqdn}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/hosts/${putit_host_fqdn}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Host with name fqdn: ${putit_host_fqdn} deleted from env: ${putit_environment_name} for application: ${putit_application_name}"
+}
+
+list_artifacts() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${application_version_regex}"
+  validate ${putit_application_version}
+  
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/versions/${putit_application_version}/artifacts"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}" 
+
+  if is_empty_response "${response_file}" ; then 
+    log "INFO" "No artifacts defined for application: ${putit_application_name}"
+  else 
+    display
+  fi
+}
+
+list_envs() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  if is_empty_response "${response_file}" ; then 
+    log "INFO" "No evironments defined for application: ${putit_application_name}"
+  else 
+    display
+  fi
+}
+
+list_hosts() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/hosts"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There are no hosts."
+  else
+    display
+  fi
+}
+
+list_credentials() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/credential"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There are no credentials assigned to the env: ${putit_environment_name}"
+  else
+    display
+  fi
+}
+
+list_versions() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/versions"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    false 
+  else
+    display
+  fi
+}
+
+list_changes() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  if [ ! -z ${putit_environment_name+x} ]; then 
+    local regex="${env_name_regex}"
+    validate ${putit_environment_name}
+    request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/orders"
+    log_msg_empty="There are no changes for application: ${putit_application_name} and env: ${putit_environment_name} which meets the requirements."
+  else 
+    request_url="${PUTIT_URL}/application/${putit_application_name}/orders"
+    log_msg_empty="There are no changes for application: ${putit_application_name} which meets the requirements."
+  fi
+
+  if [ ! -z ${putit_change_status+x} ] && [ ! -z ${putit_change_upcoming+x} ]; then 
+    local regex="${putit_change_status_regex}"
+    validate ${putit_change_status}
+    local regex="${putit_change_upcoming_regex}"
+    validate ${putit_change_upcoming}
+    append_to_req="?status=${putit_change_status}&upcoming=true"
+    local request_url=${request_url}${append_to_req}
+  elif [ ! -z ${putit_change_status+x} ] && [ -z ${putit_change_upcoming+x} ]; then
+    local regex="${putit_change_status_regex}"
+    validate ${putit_change_status}
+    append_to_req="?status=${putit_change_status}"
+    local request_url=${request_url}${append_to_req}
+  elif [ -z ${putit_change_status+x} ] && [ ! -z ${putit_change_upcoming+x} ]; then
+    local regex="${putit_change_upcoming_regex}"
+    validate ${putit_change_upcoming}
+    append_to_req="?upcoming=true"
+    local request_url=${request_url}${append_to_req}
+  fi
+
+  local response_file="$(create_tmpfile)"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "${log_msg_empty}"
+  else
+    display
+  fi
+}
+
+list_pipelines() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/pipelines"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There are no pipelines for application: ${putit_application_name}"
+  else
+    display
+  fi
+}
+
+add_pipeline() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${putit_pipeline_name}"
+  validate ${putit_pipeline_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  
+  local payload_file="$(create_tmpfile)"
+  local response_file="$(create_tmpfile)"
+  jo name=${putit_pipeline_name} > ${payload_file}
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/pipelines"
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X POST ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Pipeline ${putit_pipeline_name} added to application: ${putit_application_name} for env: ${putit_environment_name}"
+}
+
+delete_pipeline() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${putit_pipeline_name}"
+  validate ${putit_pipeline_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/pipelines/${putit_pipeline_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Pipeline ${putit_pipeline_name} deleted from application: ${putit_application_name} for env: ${putit_environment_name}"
+}
+
+update_pipeline() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+  
+  local payload_file="$(create_tmpfile)"
+  local response_file="$(create_tmpfile)"
+
+  if [ ! -z ${putit_pipeline_new_name+x} ]; then
+    local regex="${pipeline_name_regex}"
+    validate ${putit_pipeline_new_name}
+    jo name=${putit_pipeline_new_name} > ${payload_file}
+    local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/pipelines/${putit_pipeline_name}" 
+    local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X PATCH ${request_url// /%20}"
+  elif [ ! -z ${putit_pipeline_order_action+x} ] && [ ${putit_pipeline_order_action} == 'insert_at' ] && [ ! -z ${putit_pipeline_position+x} ]; then 
+    local regex="${int_regex}"
+    validate ${putit_pipeline_position}
+    jo name=${putit_pipeline_name} order_action='insert_at' new_position=${putit_pipeline_position} > ${payload_file} 
+  elif [ ! -z ${putit_pipeline_order_action+x} ] && [ ${putit_pipeline_order_action} != 'insert_at' ]; then 
+    local regex="${pipeline_order_actions_regex}"
+    validate ${putit_pipeline_order_action}
+    jo name=${putit_pipeline_name} order_action=${putit_pipeline_order_action} > ${payload_file}
+  else
+    get_help
+    exit 64
+  fi
+
+  if [ -z ${request_url+x} ] && [ -z ${request_cmd+x} ]; then 
+    local request_url="${PUTIT_URL}/application/${putit_application_name}/envs/${putit_environment_name}/pipelines/${putit_pipeline_name}/order/${putit_pipeline_order_action}"
+    local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X PUT ${request_url// /%20}"
+  fi
+  
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Pipeline ${putit_pipeline_name} updated for application: ${putit_application_name} for env: ${putit_environment_name}"
+}
+
+add_artifacts() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local regex="${application_version_regex}"
+  validate ${putit_application_version}
+
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+
+  local regex="${artifact_version_regex}"
+  validate "${putit_artifact_version}" 
+   
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo -- name=${putit_artifact_name} -s version=${putit_artifact_version} > ${payload_file}
+
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/versions/${putit_application_version}/artifacts"
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X POST ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Artifact added to the application: ${putit_application_name}"
+}
+
+delete_artifacts() {
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+
+  local regex="${application_version_regex}"
+  validate ${putit_application_version}
+
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+
+  local regex="${artifact_version_regex}"
+  validate "${putit_artifact_version}" 
+   
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/application/${putit_application_name}/versions/${putit_application_version}/artifacts/${putit_artifact_name}/${putit_artifact_version}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Artifact: ${putit_artifact_name} in version: ${putit_artifact_version} deleted from application: ${putit_application_name} in version: ${putit_application_version}"
+}
+
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  get)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_application 
+    ;; 
+  list-pipelines)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_pipelines
+    ;; 
+  list-envs)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_envs
+    ;; 
+  list-hosts)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_hosts
+    ;; 
+  list-artifacts)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_artifacts
+    ;; 
+  list-credentials)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_credentials
+    ;; 
+  list-versions)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_versions
+    ;; 
+  list-changes)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_changes
+    ;; 
+  add-envs)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_envs
+    ;; 
+  add-version)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_version
+    ;; 
+  delete-envs)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_envs
+    ;; 
+  add-hosts)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_hosts
+    ;; 
+  delete-hosts)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_hosts
+    ;; 
+  add-artifacts)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_artifacts
+    ;; 
+  delete-artifacts)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_artifacts
+    ;; 
+  add-pipeline)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_pipeline
+    ;; 
+  delete-pipeline)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_pipeline
+    ;; 
+  update-pipeline)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    update_pipeline
+    ;; 
+  set-properties)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    set_application_properties 
+    ;; 
+  get-properties)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_application_properties 
+    ;; 
+  delete-properties)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_application_properties 
+    ;; 
+  list)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_applications
+    ;;
+  create)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    create
+    ;;
+  delete)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete
+    ;;
+  *)
+    log "ERROR" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

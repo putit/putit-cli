@@ -1,0 +1,240 @@
+#!/bin/bash
+set -euo pipefail
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh
+shift 1
+
+get_help() {
+  generate_usage
+}
+
+list_artifacts() {
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/artifact"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There aren't any artifacts registred in PutIt"
+  else 
+    display
+  fi
+}
+get_artifact_versions() {
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/artifact/${putit_artifact_name}/versions"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No properties for artifact: ${putit_artifact_name} in version: ${putit_artifact_version}"
+  else 
+    display 
+  fi
+}
+
+get_artifact() {
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+
+  local response_file="$(create_tmpfile)"
+
+  if [ ! -z ${putit_artifact_version+x} ]; then
+    local regex="${artifact_version_regex}"
+    validate ${putit_artifact_version}
+    local request_url="${PUTIT_URL}/artifact/${putit_artifact_name}/version/${putit_artifact_version}"
+  else
+    local request_url="${PUTIT_URL}/artifact/${putit_artifact_name}"
+  fi
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No artifact: ${putit_artifact_name}"
+  else 
+    display 
+  fi
+  
+}
+
+add_artifact() {
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+  
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  # version set by semver 
+  if [[ ${putit_artifact_version} =~ ${putit_artifact_semver_term_regex} ]]; then
+    jo -a $(jo -- name=${putit_artifact_name} -s term="${putit_artifact_version}") > ${payload_file}
+    local log_msg="Adding new semantic version: ${putit_artifact_version} into artifact: ${putit_artifact_name}"
+    # add build into version if set
+    if [ ! -z  ${putit_artifact_semver_build+x} ]; then 
+      local regex="${putit_artifact_semver_build_regex}"
+      validate ${putit_artifact_semver_build}
+      log "DEBUG" "SemVer: ${putit_artifact_version} with build: ${putit_artifact_semver_build}"    
+      local payload_file_build="$(create_tmpfile)"
+      cat $payload_file | jq ".build+=\"${putit_artifact_semver_build}\"" > $payload_file_build
+      clean_tmp ${payload_file}
+      payload_file="${payload_file_build}"
+      local log_msg="${log_msg}. SemVer build set to: ${putit_artifact_semver_build}"
+    fi  
+    # add prefix if set
+    if [ ! -z  ${putit_artifact_semver_prefix+x} ]; then
+      local regex="${putit_artifact_semver_prefix_regex}"
+      validate ${putit_artifact_semver_prefix}
+      log "DEBUG" "SemVer: ${putit_artifact_version} with prefix: ${putit_artifact_semver_prefix}"    
+      local payload_file_prefix="$(create_tmpfile)"
+      cat $payload_file | jq ".pre+=\"${putit_artifact_semver_prefix}\"" > $payload_file_prefix
+      clean_tmp ${payload_file}
+      payload_file="${payload_file_prefix}"
+      local log_msg="${log_msg}. SemVer prefix set to: ${putit_artifact_semver_prefix}"
+    fi  
+  # version as a string
+  elif [ ! -z ${putit_artifact_version+x} ]; then 
+    local regex="${artifact_version_regex}"
+    validate "${putit_artifact_version}"
+    jo -a $(jo -- name=${putit_artifact_name} -s version="${putit_artifact_version}") > ${payload_file}
+    local log_msg="Version: ${putit_artifact_version} added into artifact: ${putit_artifact_name}."
+  fi
+
+  local request_url="${PUTIT_URL}/artifact"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "${log_msg}"
+  
+  # we need to get version from response and pass it to set_properties function. 
+  if [[ ${putit_artifact_version} =~ ${putit_artifact_semver_term_regex} ]] && [[ -f ${response_file} ]]; then
+    putit_artifact_version=$(cat ${response_file} | jq -r ".[] | .version")
+  fi 
+
+  # user specified properties - if were set - single one version
+  if [ ! -z ${putit_artifact_properties_key+x} ] && [ ! -z ${putit_artifact_properties_value+x} ]; then 
+    log "INFO" "Adding user specified properties ${putit_artifact_properties_key}=${putit_artifact_properties_value}."
+    set_artifact_properties
+  fi
+
+}
+
+delete_artifact() {
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+  
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+
+  if [ ! -z ${putit_artifact_version+x} ]; then 
+    local regex="${artifact_version_regex}"
+    validate "${putit_artifact_version}"
+    local request_url="${PUTIT_URL}/artifact/${putit_artifact_name}/version/${putit_artifact_version}"
+    local log_msg="Version: ${putit_artifact_version} deleted from the artifact: ${putit_artifact_name}."
+  else
+    local request_url="${PUTIT_URL}/artifact/${putit_artifact_name}"
+    local log_msg="Artifact ${putit_artifact_name} has been removed with all his versions."
+  fi
+
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "${log_msg}"
+}
+
+# it's not standard function, json payload is build during args validation and save to the file 
+# thanks that we can ommit bash issue - unable to pass associative array between function - but still 
+# proceed with single request with multiple properties 
+set_artifact_properties() {
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+  local regex="${artifact_version_regex}"
+  validate "${putit_artifact_version}"
+
+  # double check if file exist 
+  if [ -f ${putit_artifact_properties_file} ] &&  [ ! -z ${putit_artifact_properties_file+x} ];then
+    local response_file="$(create_tmpfile)"
+    local request_url="${PUTIT_URL}/artifact/${putit_artifact_name}/version/${putit_artifact_version}/properties"
+    local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$putit_artifact_properties_file ${request_url// /%20}"
+    
+    send_request "${request_cmd}" "${response_file}"
+    log "INFO" "Properties set for artifact: ${putit_artifact_name} in version: ${putit_artifact_version}"
+  else 
+    log "ERROR" "Missing properties payload file: ${putit_artifact_properties_file}."
+    exit 1
+  fi
+  clean_tmp ${putit_artifact_properties_file}
+  unset putit_artifact_properties_file
+}
+
+get_properties() {
+  local regex="${artifact_name_regex}"
+  validate ${putit_artifact_name}
+  local regex="${artifact_version_regex}"
+  validate "${putit_artifact_version}"
+  
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/artifact/${putit_artifact_name}/version/${putit_artifact_version}/properties"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No properties for artifact: ${putit_artifact_name} in version: ${putit_artifact_version}"
+  else 
+    display
+  fi
+}
+
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  list)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_artifacts
+    ;;
+  get)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_artifact
+    ;;
+  get-versions)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_artifact_versions
+    ;;
+  add)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_artifact
+    ;;
+  delete)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_artifact
+    ;;
+  set-properties)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    set_artifact_properties 
+    ;;
+  get-properties)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_properties 
+    ;;
+  *)
+    log "INFO" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

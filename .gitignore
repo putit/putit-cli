@@ -1,0 +1,8 @@
+.*.swp
+*log
+.putit
+.curlrc
+conf/.*orignal
+conf/putit-cli.conf
+bin/jq
+bin/jo

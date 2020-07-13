@@ -1,0 +1,132 @@
+#!/bin/bash
+set -euo pipefail
+
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh
+
+# shift application args: putit application 
+shift 1
+
+get_help() {
+    generate_usage
+}
+
+#####
+# Below two functions comes from: https://gist.github.com/thomasdarimont/46358bc8167fce059d83a1ebdb92b0e7
+decode_base64_url() {
+  local len=$((${#1} % 4))
+  local result="$1"
+  if [ $len -eq 2 ]; then result="$1"'=='
+  elif [ $len -eq 3 ]; then result="$1"'=' 
+  fi
+  echo "$result" | tr '_-' '/+' | openssl enc -d -base64
+}
+
+decode_jwt(){
+   echo $(decode_base64_url $(echo -n $2 | cut -d "." -f $1) | jq -r .user_type 2> /dev/null )
+}
+#####
+
+# it's only to make sure that auth responded with JWT token instead of some errors 
+validate_jwt_payload() {
+  local jwt=$1
+  local user_type=$(decode_jwt 2 "${jwt}")
+
+  if [ ! -z ${user_type+x} ] && [ "${user_type}" == "api" ]; then 
+    log "DEBUG" "Retrieved JWT token from putit-auth and saved it into: ${PUTIT_CURLRC}"
+  else
+    log "ERROR" "Login error, unable to parse token payload."
+    exit 1
+  fi
+}
+
+signup() {
+  local regex="${putit_username_regex}"
+  if validate ${putit_username}; then 
+    read_password
+    local response_file="$(create_tmpfile)"
+    local payload_file="$(create_tmpfile)"
+    jo api_user=$(jo email=${putit_username} password=${user_password} password_confirmation=${user_password_confirmation}) > $payload_file
+
+    local request_url="${PUTIT_AUTH_URL}/api_users"
+    local request_cmd="${PUTIT_CURL} ${response_file} ${CT_A_HEADERS_JSON} -X POST --data @$payload_file ${request_url// /%20}"
+
+    send_request "${request_cmd}" "${response_file}"
+    clean_tmp "${payload_file}" "${response_file}" 'force'
+  fi
+}
+
+# for now its global - todo per user
+login() {
+  local regex="${putit_username_regex}"
+  if validate ${putit_username}; then 
+    read -s -p "Password: " user_password
+    local payload_file="$(create_tmpfile)"
+    jo api_user=$(jo email=${putit_username} password=${user_password}) > $payload_file
+    local response_file="$(create_tmpfile)"
+    local request_url="${PUTIT_AUTH_URL}/api_users/sign_in"
+    local request_cmd="${PUTIT_CURL} ${response_file} ${CT_A_HEADERS_JSON} -X POST ${request_url// /%20} -d@$payload_file"
+
+    send_request "${request_cmd}" "${response_file}"
+    local jwt_token=$(cat ${response_file} | jq ".token" | tr -d '"')
+   
+    log "DEBUG" "Deleting payload and response files: ${payload_file} ${response_file}"
+    clean_tmp "${payload_file}" "${response_file}" 'force'
+
+    if [ ! -z ${jwt_token+x} ] && validate_jwt_payload ${jwt_token}; then 
+      echo -e "\nYour JWT token is:\n$jwt_token\n"
+      echo "header = \"Authorization: Bearer ${jwt_token}" > ${PUTIT_CURLRC} 
+    else 
+      log "ERROR" "Login error for user: ${putit_username}. Didn't get token from putit-auth."
+      exit 1
+    fi
+  fi
+}
+
+logout() {
+  local regex="${putit_username_regex}"
+  if [ -f ${PUTIT_CURLRC} ] && validate ${putit_username}; then 
+    local payload_file="$(create_tmpfile)"
+    local response_file="$(create_tmpfile)"
+    local token=$(grep Authorization ${PUTIT_CURLRC} | awk '{print $5}') 
+    jo api_user=$(jo email=${putit_username} token="${token}") > ${payload_file}
+    
+    # here we also removes JWT token from .curlrc
+    echo > ${PUTIT_CURLRC}
+
+    local request_url="${PUTIT_AUTH_URL}/api_users/sign_out"
+    local request_cmd="${PUTIT_CURL} ${response_file} ${CT_A_HEADERS_JSON} -X DELETE ${request_url// /%20} -d@$payload_file"
+    send_request "${request_cmd}" "${response_file}"
+    clean_tmp "${payload_file}" "${response_file}" 'force'
+  fi
+}
+
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  signup)
+    include_custom_functions $1
+    shift 1 
+    parse_args "$@"
+    signup
+    ;;
+  login)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    login
+    ;;
+  logout)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    logout
+    ;;
+  *)
+    log "INFO" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

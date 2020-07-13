@@ -1,0 +1,5 @@
+import --github-url <GITHUB_URL> --source-name <STEP_NAME> [--imported-name <STEP_NAME>] ; Import step into putit from github
+update --step-name <STEP_NAME> --step-new-name <STEP_NAME> ; Updates step template name.
+delete --step-name <STEP_NAME> ; Deletes step template
+list ; List all steps templates
+get --step-name <STEP_NAME> ; Show deploy step template

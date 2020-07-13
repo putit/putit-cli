@@ -1,0 +1,6 @@
+execute --change-name <NAME> --release-name <NAME> ; Execute already defined change.
+execute --app-name <NAME> --app-version <VERSION> --env-name <ENV_NAME>; Auto create change release and deploy application into specific environment. 
+set-status --change-name <NAME> --release-name <NAME> --status <STATUS>; Set status for specific deployment.
+set-status --app-name <NAME> --app-version <VERSION> --env-name <ENV_NAME> --status <STATUS>; Auto-create release and change for specific deployment and set deploy status for it. 
+get-status --app-name <NAME> [ --env-name <ENV_NAME> ]; Get latest deployment status, per ENV or for all of them.;
+get-status --change-name <NAME> --release-name <NAME> --app-name <NAME> --app-version <VERSION> --env-name <ENV_NAME> ; Get deployment status for specific change. 

@@ -1,0 +1,218 @@
+#!/bin/bash
+set -euo pipefail
+
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh 
+
+# shift application args: putit application 
+shift 1
+
+get_help() {
+  generate_usage
+}
+
+
+get_pipelines() {
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/pipeline/templates"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  if is_empty_response "${response_file}" ; then 
+    log "INFO" "There aren't any defined pipelines."
+  else 
+    display
+  fi
+}
+
+create() {
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+
+  local payload_file="$(create_tmpfile)"
+
+  jo name="${putit_pipeline_name}" > $payload_file
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/pipeline/templates"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+
+  log "INFO" "Pipeline: ${putit_pipeline_name} created."
+}
+
+delete() {
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/pipeline/templates/${putit_pipeline_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+
+  log "INFO" "Pipeline: ${putit_pipeline_name} deleted."
+}
+
+list_steps() {
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/pipeline/templates/${putit_pipeline_name}/steps"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There ar no  steps for pipeline: ${putit_pipeline_name}"
+  else
+    display
+  fi
+}
+
+add_steps() {
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+  local regex="${putit_step_name}"
+  validate ${putit_step_name}
+  
+  local payload_file="$(create_tmpfile)"
+  local response_file="$(create_tmpfile)"
+  jo name=${putit_step_name} > ${payload_file}
+  local request_url="${PUTIT_URL}/pipeline/templates/${putit_pipeline_name}/steps"
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X POST ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Step ${putit_step_name} added to pipeline: ${putit_pipeline_name}"
+}
+
+remove_steps() {
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+  local regex="${putit_step_name}"
+  validate ${putit_step_name}
+  
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/pipeline/templates/${putit_pipeline_name}/steps/${putit_step_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Step ${putit_step_name} deleted from pipeline: ${putit_pipeline_name}"
+}
+
+# we can just update name here as order is not a case for templates
+update_pipeline_template() {
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_new_name}
+
+  local payload_file="$(create_tmpfile)"
+  local response_file="$(create_tmpfile)"
+
+  jo name=${putit_pipeline_new_name} > ${payload_file}
+  local request_url="${PUTIT_URL}/pipeline/templates/${putit_pipeline_name}" 
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X PATCH ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Pipeline template ${putit_pipeline_name} updated with a new name: ${putit_pipeline_new_name}."
+}
+
+update_step() {
+  local regex="${pipeline_name_regex}"
+  validate ${putit_pipeline_name}
+  local regex="${putit_step_name}"
+  validate ${putit_step_name}
+
+  local payload_file="$(create_tmpfile)"
+  local response_file="$(create_tmpfile)"
+
+  if [ ! -z ${putit_step_new_name+x} ]; then
+    local regex="${pipeline_name_regex}"
+    validate ${putit_step_new_name}
+    jo name=${putit_step_new_name} > ${payload_file}
+    local request_url="${PUTIT_URL}/pipeline/templates/${putit_pipeline_name}/steps/${putit_step_name}"
+    local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X PATCH ${request_url// /%20}"
+  elif [ ! -z ${putit_step_order_action+x} ] && [ ${putit_step_order_action} == 'insert_at' ] && [ ! -z ${putit_step_position+x} ]; then 
+    local regex="${int_regex}"
+    validate ${putit_step_position}
+    jo name=${putit_step_name} order_action='insert_at' new_position=${putit_step_position} > ${payload_file} 
+  elif [ ! -z ${putit_step_order_action+x} ] && [ ${putit_step_order_action} != 'insert_at' ]; then 
+    local regex="${pipeline_order_actions_regex}"
+    validate ${putit_step_order_action}
+    jo name=${putit_step_name} order_action=${putit_step_order_action} > ${payload_file}
+  else
+    get_help
+    exit 64
+  fi  
+  
+  if [ -z ${request_url+x} ] && [ -z ${request_cmd+x} ]; then 
+    local request_url="${PUTIT_URL}/pipeline/templates/${putit_pipeline_name}/steps/${putit_step_name}/order/${putit_step_order_action}"
+    local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X PUT ${request_url// /%20}"
+  fi
+
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Step ${putit_step_name} updated in pipeline: ${putit_pipeline_name}"
+}
+
+
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  list-steps)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_steps
+    ;; 
+  add-steps)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_steps 
+    ;; 
+  remove-steps)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    remove_steps 
+    ;; 
+  update-step)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    update_step 
+    ;; 
+  list)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_pipelines
+    ;;
+  create)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    create
+    ;;
+  delete)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete
+    ;;
+  update)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    update_pipeline_template
+    ;;
+  *)
+    log "ERROR" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

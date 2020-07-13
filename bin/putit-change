@@ -1,0 +1,363 @@
+#!/bin/bash
+set -euo pipefail
+
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh 
+
+# shift application args: putit application 
+shift 1
+
+get_help() {
+  generate_usage
+}
+
+list_changes() {
+  if [ ! -z ${putit_release_name+x} ]; then
+    local regex="${release_name_regex}"
+    validate ${putit_release_name}
+    local request_url="${PUTIT_URL}/release/${putit_release_name}/orders"
+  else
+    local request_url="${PUTIT_URL}/orders"
+  fi
+   
+  if [ ! -z ${putit_change_status+x} ] && [ ! -z ${putit_change_upcoming+x} ]; then 
+    local regex="${putit_change_status_regex}"
+    validate ${putit_change_status}
+    local regex="${putit_change_upcoming_regex}"
+    validate ${putit_change_upcoming}
+    append_to_req="?status=${putit_change_status}&upcoming=true"
+    local request_url=${request_url}${append_to_req}
+  elif [ ! -z ${putit_change_status+x} ] && [ -z ${putit_change_upcoming+x} ]; then
+    local regex="${putit_change_status_regex}"
+    validate ${putit_change_status}
+    append_to_req="?status=${putit_change_status}"
+    local request_url=${request_url}${append_to_req}
+  elif [ -z ${putit_change_status+x} ] && [ ! -z ${putit_change_upcoming+x} ]; then
+    local regex="${putit_change_upcoming_regex}"
+    validate ${putit_change_upcoming}
+    append_to_req="?upcoming=true"
+    local request_url=${request_url}${append_to_req}
+  fi  
+  local response_file="$(create_tmpfile)"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There are no changes which meets the requirements."
+  else
+    display
+  fi
+}
+
+list_dependant() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No dependant releases defined."
+  else
+    cat ${response_file} | jq -r '["Id", "Name"], (.[] | [.id,.name]) | @sh' | column -t
+  fi
+}
+
+get_change() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+  
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No change with name: ${putit_change_name}."
+  else
+    display
+  fi
+}
+
+get_status() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No change with name: ${putit_change_name}."
+  else
+    cat ${response_file} | jq -r .status 
+  fi
+}
+
+# create. 
+# add date validate : deployer-services/issues/128
+create() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+  # optional
+  if [ ! -z ${putit_change_description+x} ]; then
+    local regex="${description_regex}"
+    validate ${putit_change_description}
+  fi
+
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo name="${putit_change_name}" start_date="${putit_change_start_date}" end_date="${putit_change_end_date}" description="${putit_change_description}" > ${payload_file}
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Change: ${putit_change_name} added to the release: ${putit_release_name}."
+}
+
+delete() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Change: ${putit_change_name} deleted from the release: ${putit_release_name}."
+}
+
+# only internal
+set_envs() {
+  is_env_present "${putit_application_name}" "${putit_environment_name}"
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo -a $(jo env_name=${putit_environment_name}) > ${payload_file}
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/applications/${putit_application_name}/${putit_application_version}/envs"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Env: ${putit_environment_name} added to the change: ${putit_change_name} which is part of release: ${putit_release_name}"
+}
+
+delete_env() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${application_version_regex}"
+  validate ${putit_application_version}
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/applications/${putit_application_name}/${putit_application_version}/envs/${putit_environment_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Env: ${putit_environment_name} for application: ${putit_application_name} deleted from the change: ${putit_change_name} which is part of release: ${putit_release_name}"
+}
+
+add_application() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${application_version_regex}"
+  validate ${putit_application_version}
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+  local regex="${env_name_regex}"
+  validate ${putit_environment_name}
+ 
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo -a "$(jo -- application_name=${putit_application_name} -s version_name=${putit_application_version})" > ${payload_file}
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/applications"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  
+  set_envs
+  
+  # set some default properties for application and env
+  putit application set-properties --app-name ${putit_application_name} --env-name ${putit_environment_name} --properties putit_application_name=${putit_application_name} --properties putit_application_version=${putit_application_version} --properties putit_environment_name=${putit_environment_name}
+  log "INFO" "Application: ${putit_application_name} in version: ${putit_application_version} added to the change: ${putit_change_name} which is part of release: ${putit_release_name}"
+}
+
+delete_application() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${app_name_regex}"
+  validate ${putit_application_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+ 
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/applications/${putit_application_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Application: ${putit_application_name} deleted from change: ${putit_change_name} which is part of release: ${putit_release_name}"
+}
+
+add_approver() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+  local regex="${putit_username_regex}"
+  validate ${putit_change_email}
+
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo -a $(jo email=${putit_change_email}) > ${payload_file}
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/approvers"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X POST --data @$payload_file ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Approver: ${putit_change_email} added to the change: ${putit_change_name} which is part of release: ${putit_release_name}"
+}
+
+delete_approver() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+  local regex="${putit_username_regex}"
+  validate ${putit_change_email}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/approvers/${putit_change_email}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Approver: ${putit_change_email} deleted from the change: ${putit_change_name} which is part of release: ${putit_release_name}"
+}
+
+execute() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+  local regex="${change_name_regex}"
+  validate ${putit_change_name}
+  
+  # get change status
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/status"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  local putit_change_status=$(cat ${response_file})
+  log "INFO" "Status for a change: ${putit_change_name} is: ${putit_change_status}"
+  
+  # remove " from putit_change_status
+  if [ "${putit_change_status//\"}" == "approved" ] || [ "${putit_change_status//\"}" == "working" ] ; then 
+    local response_file="$(create_tmpfile)"
+    local request_url="${PUTIT_URL}/release/${putit_release_name}/orders/${putit_change_name}/execute"
+    local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+    log "INFO" "Executing change: ${putit_change_name} which is part of release: ${putit_release_name}."
+    send_request "${request_cmd}" "${response_file}"
+    log "INFO" "Change: ${putit_change_name} executed."
+    # TODO check status for this deployment 
+  else 
+    log "ERROR" "Change status: ${putit_change_status} doesn't allow executing this change." 
+  fi
+}
+
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  list)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_changes 
+    ;; 
+  get)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_change 
+    ;; 
+  get-status)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_status 
+    ;; 
+  create)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    create 
+    ;;
+  delete)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete 
+    ;;
+  set-envs)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    set_envs
+    ;;
+  delete-env)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_env
+    ;;
+  add-application)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_application
+    ;;
+  delete-application)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_application
+    ;;
+  add-approver)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_approver
+    ;;
+  delete-approver)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete_approver
+    ;;
+  execute)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    execute
+    ;;
+  *)
+    log "INFO" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

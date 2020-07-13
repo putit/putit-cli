@@ -1,0 +1,3 @@
+signup --username <EMAIL>; Register new user"
+login --username <EMAIL>; Login as a user"
+logout --username <EMAIL>; Logout user"

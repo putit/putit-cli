@@ -1,0 +1,16 @@
+create --pipeline-name <PIPELINENAME> ; Create new deployment pipeline template.
+delete --pipeline-name <PIPELINENAME> ; Delete deployment pipeline template.
+update --pipeline-name <PIPELINENAME> --pipeline-new-name <PIPELINENAME> ; Update deployment pipeline template with a new name.
+add-steps --pipeline-name <PIPELINENAME> --step-name <STEP_NAME> ; Adds steps into deployment pipeline template.
+update-step --pipeline-name <PIPELINENAME> --step-name <STEP_NAME> (--step-new-name <STEP_NAME> | --step-order-action <ORDER_ACTION>); Updates steps with a new name or set for it a new position in pipeline template.
+remove-steps --pipeline-name <PIPELINENAME> --step-name <STEP_NAME> ; Removes steps from deployment pipeline template.
+list ; List all deployment pipeline templates.
+
+list-steps --pipeline-name <PIPELINENAME> ; List steps for that pipeline template.
+
+Options:
+--pipeline-name <PIPELINE_NAME> ; Pipeline name
+--pipeline-new-name <PIPELINE_NAME> ; New name for that pipeline
+--step-name <STEP_NAME> ; Step name
+--step-new-name <STEP_NAME> ; New name for that step.
+--step-order-action <ORDER_ACTION>; Move step by one of those actions: insert_at|move_lower|move_higher|move_to_bottom|move_to_top

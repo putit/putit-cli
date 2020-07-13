@@ -1,0 +1,213 @@
+#!/bin/bash
+set -euo pipefail
+
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh
+
+# shift application args: putit step
+shift 1
+
+get_help() {
+  generate_usage
+}
+
+check_git_command() {
+  PUTIT_GIT_TMP=$(which git)
+  response_code=$?
+  if [ "${response_code}" -ne "0" ]; then 
+    log "ERROR" "Missing git command."
+  else 
+    PUTIT_GIT=${PUTIT_GIT_TMP}
+    log "DEBUG" "Found git install under tha path: ${PUTIT_GIT}"
+  fi
+  unset PUTIT_GIT_TMP response_code
+}
+
+import_step_files() {
+  # we are supporting: vars templates tasks files handlers defaults as part of ansible role. 
+  # files and templates can have different extension than yml
+  declare -a step_components=('vars' 'tasks' 'handlers' 'defaults' 'files' 'templates')
+  for step_component in "${step_components[@]}"; do 
+    if [ "${step_component}" == "files" ] || [ "${step_component}" == "templates" ]; then 
+      local file_pattern='*'
+    else 
+      local file_pattern='*.yml'
+    fi
+    if [ -d $step_dir/$step_component ]; then
+      for file in $(find $step_dir/$step_component -maxdepth 2 -type f -name "${file_pattern}"); do
+        log "DEBUG" "Step template import file: ${file}"
+        local response_file="$(create_tmpfile)"
+        local request_url="${PUTIT_URL}/step/templates/${putit_step_imported_name}/${step_component}"
+        local request_cmd="${PUTIT_CURL} ${response_file} ${CT_HEADER_DATA} --form file=@${file} -X POST ${request_url// /%20}"
+        send_request "${request_cmd}" "${response_file}"
+        log "INFO" "Imported file: ${file} for step: ${putit_step_imported_name}."
+      done
+    fi
+  done
+}
+
+create_step() {
+  local step_name=$1
+  local step_description=$2
+  local step_properties_description=$3
+
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo name=${step_name} template=true description="${step_description}" properties_description="${step_properties_description}" > ${payload_file}
+  log "DEBUG" "Payload file: ${payload_file} created."
+  local request_url="${PUTIT_URL}/step/templates"
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X POST ${request_url// /%20}"
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Added step template: ${step_name}"
+}
+
+import_step() {
+  check_git_command
+  
+  local default_repo_name=${putit_step_github_url##*/}
+  log "DEBUG" "GitHub URL: $putit_step_github_url default_repo_name $default_repo_name"
+ 
+  # create tmpdir for imported step files
+  local tmp_import_dir=$(create_tmpdir)
+ 
+  # check if step with that name exist in putit 
+  local response_file="$(create_tmpfile)"
+  local response=$(${PUTIT_CURL} ${response_file} -X GET ${PUTIT_URL}/step/templates/${default_repo_name})
+  if [ ${response} -eq 404 ]; then 
+    local response_file="$(create_tmpfile)"
+    local payload_file="$(create_tmpfile)"
+
+    log "DEBUG" "Clonning repository: ${putit_step_github_url}, details in file: ${response_file}"
+    ${PUTIT_GIT} clone ${putit_step_github_url} "${tmp_import_dir}/${default_repo_name}" > ${response_file}
+    git_clone_status=$?
+    if [ ${git_clone_status} -ne 0 ];then 
+      log "ERROR" "Clonning GitHub repository: ${putit_step_github_url} failed."
+      exit 1
+    else
+      log "INFO" "Clonned GitHub repository: ${putit_step_github_url}."
+    fi
+    unset git_clone_status
+
+    log "INFO" "Searching for root step directory inside imported repository" 
+    local find_step_cmd="find ${tmp_import_dir}/${default_repo_name} -maxdepth 4 -type d -name ${putit_step_source_name}"
+    local step_dir=$(${find_step_cmd})
+    log "DEBUG" "${find_step_cmd}"
+    sleep 3
+
+    if [ ! -z ${step_dir} ] && [ -d ${step_dir} ]; then 
+      local date=$(date '+%Y-%m-%d %H:%M:%S')
+      putit_step_description="Imported from: ${putit_step_github_url} at ${date}"
+      step_properties_description="Default step properties description"
+      create_step ${putit_step_imported_name} ${putit_step_description} ${step_properties_description}
+      import_step_files ${putit_step_imported_name}
+      unset putit_step_description step_properties_description
+    else 
+      log "INFO" "[ERROR] Step template: ${putit_step_source_name} doesn't exisit under github repo: ${putit_step_github_url}"
+    fi
+  else 
+    log "INFO" "Step template: ${putit_step_imported_name} already exist. Please use different name."
+  fi
+  #log "DEBUG" "Cleaning up tmp"
+  #rm -fr ${tmp_import_dir}
+}
+
+get_step() {
+  local regex="${putit_step_name_regex}"
+  validate ${putit_step_name}
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/step/templates/${putit_step_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "ERROR" "No such step template: ${putit_step_name}."
+  else
+    display
+  fi
+}
+
+delete () {
+  local regex="${putit_step_name_regex}"
+  validate ${putit_step_name}
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/step/templates/${putit_step_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Step template: ${putit_step_name} deleted."
+}
+
+# only name could be updated, as order is not applicable for step template
+update() {
+  local regex="${putit_step_name}"
+  validate ${putit_step_name}
+  local regex="${pipeline_name_regex}"
+  validate ${putit_step_new_name}
+
+  local payload_file="$(create_tmpfile)"
+  local response_file="$(create_tmpfile)"
+
+  jo name=${putit_step_new_name} > ${payload_file}
+  local request_url="${PUTIT_URL}/step/templates/${putit_step_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X PATCH ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}" 
+  log "INFO" "Step ${putit_step_name} updated with a new name: ${putit_step_new_name}."
+}
+
+list_steps() {
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/step/templates"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "There are no steps."
+  else
+    display
+  fi
+}
+
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  list)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_steps
+    ;;
+  get)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_step 
+    ;;
+  delete)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete 
+    ;;
+  update)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    update
+    ;;
+  import)
+    # before shift $1 == import
+    include_custom_functions $1
+    shift 1
+    # after shift $1 != import $#==$#-1
+    parse_args "$@"
+    import_step 
+    ;;
+  *)
+    log "INFO" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

@@ -1,0 +1,11 @@
+create --change-name <NAME> --release-name <NAME> ; Create new change
+delete --change-name <NAME> --release-name <NAME> ; Delete new change
+execute --change-name <NAME> --release-name <NAME> ; Execute change
+add-approver --change-name --release-name --email <EMAIL> ; Add email address as approver
+delete-approver --change-name --release-name --email <EMAIL> ; Remover email address from approvers
+add-application --change-name <NAME> --release-name <NAME> --app-name <APP_NAME> --env-name <APP_ENV> --app-version <VERSION> ; Add application to the change
+delete-env --change-name <NAME> --release-name <NAME> --app-name <APP_NAME> --env-name <APP_ENV> --app-version <VERSION> ; Add application to the change
+delete-application --change-name <NAME> --release-name <NAME> --app-name <APP_NAME> ;  Removes application from the change
+list [ --release-name <NAME> --change-status <STATUS> --change-upcoming ] ; List all changes 
+get-status --change-name --release-name ; Get status of the change
+get --change-name --release-name; Get the change

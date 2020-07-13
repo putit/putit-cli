@@ -1,0 +1,41 @@
+create --app-name <APP_NAME> [--app-version <VERSION>] ; Create new application
+delete --app-name <APP_NAME> [--app-version <VERSION>] ; Delete application and all versions or just the single one
+add-version --app-name <APP_NAME> --app-version <VERSION> [--version-build <BUILD> --version-prefix <PREFIX>]; Set application version manually or using SemVer. 
+add-artifacts --app-name <APP_NAME> --app-version <VERSION> --art-name <ART_NAME> --art-version <ART_VERSION> ; Add artifact to the application
+delete-artifacts --app-name <APP_NAME> --app-version <VERSION> --art-name <ART_NAME> --art-version <ART_VERSION> ; Removes artifact from the application
+add-pipeline --app-name <APP_NAME> --pipeline-name <PIPELINE_NAME> --env-name <ENV_NAME>; Adds pipelines to the application with env
+delete-pipeline --app-name <APP_NAME> --pipeline-name <PIPELINE_NAME> --env-name <ENV_NAME>; Removes pipelines from the application with env   
+update-pipeline --app-name <APP_NAME> --env-name <ENV_NAME> --pipeline-name <PIPELINE_NAME> --peline-order-action <ORDER_ACTION>; Updates pipelines order for the application with env   
+update-pipeline --app-name <APP_NAME> --env-name <ENV_NAME> --pipeline-name <PIPELINE_NAME> --pipeline-new-name <PIPELINE_NAME> ; Updates pipelines order for the application with env   
+add-envs --app-name <APP_NAME> --env-name <ENV_NAME> ; Adds envs to the application   
+delete-envs --app-name <APP_NAME> --env-name <ENV_NAME> ; Removes envs from the application   
+add-hosts --app-name <APP_NAME> --env-name <ENV_NAME> --host-name <HOST_NAME> --ip <IP> --fqdn <FQDN> ; Create new host under environment <ENV_NAME>
+delete-hosts --app-name <APP_NAME> --env-name <ENV_NAME> --fqdn <FQDN> ; Deletes host from the environment <ENV_NAME>
+get-properties --app-name <APP_NAME> --env-name <ENV_NAME> ; Shows properties for application on specified environment
+set-properties --app-name <APP_NAME> --env-name <ENV_NAME> --properties <KEY=VALUE> ; Set properties for application on specified environment
+delete-properties --app-name <APP_NAME> --env-name <ENV_NAME> --properties <KEY=VALUE> ; Deletes properties for application on specified environment
+get --app-name <APP_NAME> [ --app-version <VERSION> ] ; Displays as a JSON detailed information about application
+list ; List all applications
+list-artifacts --app-name <APP_NAME> --app-version <VERSION> ; List artifacts for that application
+list-envs --app-name <APP_NAME> ; List envs for that application   
+list-hosts --app-name <APP_NAME> --env-name  <ENV_NAME>; List hosts under that env for that application   
+list-pipelines --app-name <APP_NAME> --env-name <ENV_NAME> ; List deployment pipelines for that application   
+list-credentials --app-name <APP_NAME> --env-name <ENV_NAME> ; List deployment credentials for that application   
+list-versions --app-name <APP_NAME> ; List versions for that application
+list-changes --app-name <APP_NAME> [ --env-name  <ENV_NAME> --change-status <STATUS> --change-upcoming ]; List changes for that application
+
+Options:
+--app-name <APP_NAME> ; Application name
+--app-version <APP_VERSION> ; Application version. Could be provided as string or as SemVer term: major or minor or patch. 
+--version-build <BUILD> ; Build number which will be added into version, when user will use SemVer.
+--version-prefix <PREFIX> ; Prefix number which will be added into version, when user will use SemVer.
+--step-name <STEP_NAME> ; Step name
+--env-name <ENV_NAME> ; Environment name
+--host-name <STEP_NAME> ; Host name, a short name for host.
+--ip <IP>; Host IPv4. 
+--FQDN <IP>; Host fully qualified domain name.
+--art-name <ARTIFACT_NAME> ; Artifact name.
+--art-version <ARTIFACT_VERSION> ; Artifact version.
+--change-status working|waiting_for_approvals|approved|in_deployment|deployed|failed|unknown|closed; Status for a change. 
+--change-upcoming ; Defaults false. List changes which are planned in the future. 
+--peline-order-action <ORDER_ACTION>; Move pipeline by one of those actions: insert_at|move_lower|move_higher|move_to_bottom|move_to_top

@@ -1,0 +1,171 @@
+#!/bin/bash
+set -euo pipefail
+
+. ${PUTIT_CLI_INSTALL_DIR}/includes/validations/input_validations.sh
+. ${PUTIT_CLI_INSTALL_DIR}/includes/common-functions.sh 
+
+# shift application args: putit application 
+shift 1
+
+get_help() {
+  generate_usage
+}
+
+
+list_releases() {
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "INFO" "No releases defined."
+  else
+    display
+  fi
+}
+
+# create or return if exist 
+create() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo name="${putit_release_name}" > ${payload_file}
+  local request_url="${PUTIT_URL}/release"
+  local request_cmd="${PUTIT_CURL} ${response_file} --data @$payload_file -X POST ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Release: ${putit_release_name} created."
+}
+
+delete() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+  
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Release: ${putit_release_name} deleted."
+}
+
+add_dependencies(){
+  local regex="${release_name_regex}"
+  validate ${putit_release_master_name}
+  validate ${putit_release_depend_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_master_name}/dependant-releases/${putit_release_depend_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X PUT ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Release: ${putit_release_depend_name} added as dependant to the release: ${putit_release_master_name}."
+}
+
+remove_dependencies(){
+  local regex="${release_name_regex}"
+  validate ${putit_release_master_name}
+  validate ${putit_release_depend_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_master_name}/dependant-releases/${putit_release_depend_name}"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X DELETE ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Release: ${putit_release_depend_name} removed as dependant to the release: ${putit_release_master_name}."
+}
+
+set_status() {
+  local regex="${release_status_regex}"
+  validate ${putit_release_status}
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+
+  local response_file="$(create_tmpfile)"
+  local payload_file="$(create_tmpfile)"
+  jo status="${putit_release_status}" > ${payload_file}
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/status"
+  local request_cmd="${PUTIT_CURL} ${response_file} -X PUT ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  log "INFO" "Status: ${putit_release_status} set for release: ${putit_release_name}."
+}
+
+get_status() {
+  local regex="${release_name_regex}"
+  validate ${putit_release_name}
+
+  local response_file="$(create_tmpfile)"
+  local request_url="${PUTIT_URL}/release/${putit_release_name}/status"
+  local request_cmd="${PUTIT_CURL} ${response_file} ${request_url// /%20}"
+
+  send_request "${request_cmd}" "${response_file}"
+  if is_empty_response "${response_file}" ; then
+    log "ERROR" "No status for releases: ${putit_release_name} defined."
+    exit 1
+  else
+    cat ${response_file} 
+  fi
+}
+if [[ $# -eq 0 ]]; then 
+  get_help && exit 64
+fi
+
+case "$1" in
+  list)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_releases
+    ;; 
+  list-dependant)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    list_dependant
+    ;; 
+  set-status)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    set_status 
+    ;; 
+  get-status)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    get_status 
+    ;; 
+  add-dependencies)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    add_dependencies
+    ;; 
+  remove-dependencies)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    remove_dependencies
+    ;; 
+  create)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    create 
+    ;;
+  delete)
+    include_custom_functions $1
+    shift 1
+    parse_args "$@"
+    delete
+    ;;
+  *)
+    log "INFO" "$1: Didn't match anything"
+    get_help
+    exit 64
+    ;;
+esac

@@ -1,0 +1,7 @@
+[general]
+putit_core_hostname=localhost
+putit_core_port=9292
+putit_auth_hostname=localhost
+putit_auth_port=3000
+putit_cli_install_dir=/opt/putit/putit-cli
+putit_ignore_untrusted_certs=1
